@@ -1,0 +1,80 @@
+import requests
+from datetime import datetime, timedelta
+import time
+import os
+import csv
+
+# 설정
+STN = '22101'
+AUTH_KEY = 'k0nx4-P6SYqJ8ePj-lmKng'
+BASE_URL = 'https://apihub.kma.go.kr/api/typ01/url/sea_obs.php'
+COLUMNS = ['TM', 'STN', 'WH', 'WD', 'WS', 'GST', 'TW', 'TA', 'PA', 'HM']
+SAVE_PATH = 'metocean_data.csv'
+
+START_DATE = datetime(2025, 5, 1)
+END_DATE = datetime.now()
+
+def fetch_hourly_data_for_day(date):
+    rows = []
+    for hour in range(24):
+        tm = date.replace(hour=hour, minute=0)
+        tm_str = tm.strftime('%Y%m%d%H%M')  # 문자열로 저장
+        url = f'{BASE_URL}?stn={STN}&tm={tm_str}&help=0&authKey={AUTH_KEY}'
+
+        try:
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                lines = res.text.strip().split('\n')
+                for line in lines:
+                    if line.startswith('B,'):
+                        items = line.split(',')
+                        row = {
+                            'TM': f"'{tm_str}'",  # ← 따옴표로 감싸 저장 (Excel에서 E+11 방지)
+                            'STN': items[2].strip(),
+                            'WH': items[6].strip(),
+                            'WD': items[7].strip(),
+                            'WS': items[8].strip(),
+                            'GST': items[9].strip(),
+                            'TW': items[10].strip(),
+                            'TA': items[11].strip(),
+                            'PA': items[12].strip(),
+                            'HM': items[13].strip()
+                        }
+                        rows.append(row)
+            time.sleep(0.2)
+        except Exception as e:
+            print(f' {tm_str} 요청 실패:', e)
+    return rows
+
+def load_existing_timestamps():
+    if not os.path.exists(SAVE_PATH):
+        return set()
+    with open(SAVE_PATH, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        return set(row['TM'].replace("'", "") for row in reader)  # 따옴표 제거하고 비교
+
+def save_to_csv(rows):
+    file_exists = os.path.exists(SAVE_PATH)
+    with open(SAVE_PATH, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=COLUMNS, quoting=csv.QUOTE_MINIMAL)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerows(rows)
+
+# 실행
+existing_tms = load_existing_timestamps()
+print(f" 기존 저장된 데이터 개수: {len(existing_tms)}")
+
+current = START_DATE
+while current.date() <= END_DATE.date():
+    print(f' {current.strftime("%Y-%m-%d")} 수집 중...')
+    day_rows = fetch_hourly_data_for_day(current)
+    new_rows = [r for r in day_rows if r['TM'].replace("'", "") not in existing_tms]
+
+    if new_rows:
+        save_to_csv(new_rows)
+        print(f' {len(new_rows)}개 저장됨.')
+    else:
+        print(f' 저장할 신규 데이터 없음.')
+
+    current += timedelta(days=1)
